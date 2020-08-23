@@ -1,0 +1,145 @@
+theory four_way_handshake
+begin
+//Tamarin builtin functions
+builtins: symmetric-encryption,hashing
+//user define functions
+functions: PRF/2, password/0[private]
+
+/* We formalize the following PreShared Four_Way_HandShake handshake.
+
+  protocol FWH {
+    1. A -> S: A,S,ANonce
+
+    2. A <- S: S, A, SNonce,h(ANonce,SNonce,PTK)
+
+    3. A -> S: ANonce,h(ANonce,PTK)
+
+    4. A <- S: h(SNonce,PTK)
+  }
+*/
+
+//Password share infrastructure
+rule Share_Password:
+[]
+-->
+[ !PWD($A, password)]
+
+// Compromising an agent's password
+rule Reveal_Password:
+[!PWD(A,password)]--[Reveal(A)]->
+[Out(password)]
+
+// Initialize Role AP
+rule Init_A:
+[ Fr(~id),!PWD($A, password),!PWD($S, password)]
+--[ Create($A, ~id), Role('A'),Neq($A,$S)]->
+[ St_A_1($A, ~id,$S)]
+
+// Initialize Role STA
+rule Init_S:
+[ Fr(~id),!PWD($A, password),!PWD($S, password)]
+--[ Create($S, ~id), Role('S'),Neq($A,$S) ]->
+[ St_B_1($S, ~id, $A)]
+
+
+// Role AP sends first message
+rule A_1send:
+[  St_A_1(A,~id,S),Fr(~ANonce)]
+--[ Role('A')]->
+[Out(<A,S,~ANonce>),St_A_2(A,~id,S,~ANonce)]
+
+// Role STA receives first message and sends second message
+rule S_1receive_2send:
+let 
+	PTK = PRF(password,<ANonce,~SNonce,A,S>)
+    MIC = h(<ANonce,~SNonce,A,S,PTK>)                                     //加入标识符 防止中间人修改标识符 代表想要发给A 加入S表示发送方为S
+in
+[St_B_1(S, ~id, A),Fr(~SNonce)
+,In(<A,S,ANonce>),!PWD(S, password)]
+--[ Neq(ANonce,~SNonce),Role('S')]->
+[Out(<S, A, ~SNonce, MIC>),ST_B_2(S, ~id, A,ANonce,~SNonce,PTK)]
+
+// Role AP receives second message and sends third message
+rule A_2receive_3send:
+let 
+	PTK = PRF(password,<~ANonce,SNonce,A,S>)
+    MIC1 = h(<~ANonce,SNonce,A,S,PTK>)                  
+    MIC2 = h(<~ANonce,A,S,PTK>)                
+in
+[In(<S,A,SNonce,MIC>),St_A_2(A,~id,S,~ANonce)
+,!PWD(A, password)]
+--[ Neq(~ANonce,SNonce),Role('A'),Eq(MIC,MIC1)
+   ,Running(S,A,<'STA',PTK>)]->
+[Out(<A,S,~ANonce,MIC2>),ST_A_3(A,~id,S,~ANonce,SNonce,PTK)]
+
+// Role STA receives third message and sends fourth message
+rule S_3receive_4send:
+let 
+    MIC1= h(<ANonce,A,S,PTK>)   
+    MIC2= h(<~SNonce,A,S,PTK>)
+in
+[In(<A,S,ANonce,MIC>),ST_B_2(S, ~id, A,ANonce,~SNonce,PTK)]
+--[Secret(A,S,PTK),Role('S'),Eq(MIC,MIC1)
+  ,Commit(S,A,<'STA',PTK>),Running(A,S,<'AP',PTK>)]->
+[Out(<S,A,MIC2>)]
+
+//Role AP receives fourth message
+rule A_4receive:
+let 
+       MIC1= h(<SNonce,A,S,PTK>)
+in
+[In(<S,A,MIC>),ST_A_3(A,~id,S,~ANonce,SNonce,PTK)]
+--[Secret(A,S,PTK),Finshed(),Role('A')
+  ,Eq(MIC,MIC1),Commit(A,S,<'AP',PTK>)]->
+[]
+
+//considering only those traces that received message is consistent with the expected receive message
+restriction Equality:
+"All x y #i. Eq(x,y) @i ==> x = y"
+
+//considering only those traces that STA and AP generate different random nonces
+restriction Inequality:
+"All x #i. Neq(x,x) @ #i ==> F"
+
+/* we model password reveals and adapt the following security properties. */
+/*To ensure the protocol we models can run to completion.*/
+lemma executable:
+exists-trace
+"Ex #j. Finshed() @j"
+
+/* the secrecy of PTK from the perspective of both the AP and the STA */
+lemma secret:
+all-traces
+"All A S n #i. 
+	Secret(A,S,n) @i 
+	==>
+	(not (Ex #j. K(n) @j)) 
+	| (Ex  C #j. Reveal(C) @j)
+"
+
+/* the secrecy of PTK whether remains after a compromise  from the perspective of both AP and STA*/
+lemma secrecy_PFS:  
+"All A S x #i.
+      Secret(A,S,x) @i  ==>
+        not (Ex #j. K(x)@j) 
+		| (Ex C #r.Reveal(C) @r  & r<i)
+	 "
+	 
+/* Injective agreement from the perspective of both the STA and the AP.*/
+lemma injective_authentication:
+  " /* Whenever somebody commits to running a session, then*/
+	All A B t #i.
+		Commit(A,B,t) @i
+	==> 
+	/* there is somebody running a session with the same parameters */
+	(Ex #j. Running(A,B,t) @j & j < i
+		/* and there is no other commit on the same parameters */
+		& not (Ex A2 B2 #i2. 
+				Commit(A2,B2,t) @i2 & not (#i2 = #i)
+				)
+	)
+     /* or the adversary perform a password reveal on an agent */
+	| (Ex C #r. Reveal(C)@r )
+   "
+   
+end

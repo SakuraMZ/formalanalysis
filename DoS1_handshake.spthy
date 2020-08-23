@@ -1,0 +1,81 @@
+theory DoS1_handshake
+begin
+//Tamarin builtin functions
+builtins: symmetric-encryption,hashing
+//user define functions
+functions: PRF/2, password/0[private]
+
+/* We formalize the following PreShared Four_Way_HandShake handshake.
+
+  protocol FWH {
+    1. A -> S: A,S,ANonce
+
+    2. A <- S: S, A, SNonce,h(ANonce,SNonce,PTK)
+
+    3. A -> S: ANonce,h(ANonce,PTK)
+
+    4. A <- S: h(SNonce,PTK)
+  }
+*/
+
+//Password share infrastructure
+rule Share_Password:
+[]
+-->
+[ !PWD($A, password)]
+
+// Compromising an agent's password
+rule Reveal_Password:
+[!PWD(A,password)]--[Reveal(A)]->
+[Out(password)]
+
+// Initialize Role AP
+rule Init_A:
+[ Fr(~id),!PWD($A, password),!PWD($S, password)]
+--[ Create($A, ~id), Role('A'),Neq($A,$S)]->
+[ St_A_1($A, ~id,$S)]
+
+// Initialize Role STA
+rule Init_S:
+[ Fr(~id),!PWD($A, password),!PWD($S, password)]
+--[ Create($S, ~id), Role('S'),Neq($A,$S) ]->
+[ St_B_1($S, ~id, $A)]
+
+
+// Role AP sends first message
+rule A_1send:
+[  St_A_1(A,~id,S),Fr(~ANonce)]
+--[ Role('A'),Send(A, ~ANonce)]->
+[Out(<A,S,~ANonce>),St_A_2(A,~id,S,~ANonce)]
+
+
+rule Adversary_DoS_Attack:
+	[Fr(~ANonce_false), In(<A,S,ANonce>)]
+	-->
+	[Out(<A,S,~ANonce_false>)]
+
+
+// Role STA receives first message and sends second message
+rule S_1receive_2send:
+let 
+	PTK = PRF(password,<ANonce,~SNonce,A,S>)
+        MIC = h(<ANonce,~SNonce,A,S,PTK>)                                   
+in
+[St_B_1(S, ~id, A),Fr(~SNonce)
+,In(<A,S,ANonce>),!PWD(S, password)]
+--[Expensive_PTK_Compute(),Recv(S, ANonce),OnlyOnce(),DoSProtection(A,ANonce)]->
+[Out(<S, A, ~SNonce, MIC>),ST_B_2(S, ~id, A,ANonce,~SNonce,PTK)]
+
+restriction OnlyOnce: 
+	"All #i #j. OnlyOnce()@i & OnlyOnce()@j ==> #i = #j"
+
+lemma Dos_protection: 
+"
+All A m #i. 
+    DoSProtection(A,m) @i 
+    ==>
+    (Ex #j. Send(A,m) @j & j<i) 
+    | (Ex B #r. Reveal(B)@r & r < i)      
+"
+   
+end

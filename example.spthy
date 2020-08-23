@@ -1,0 +1,65 @@
+theory example
+begin
+/* 1. Cryptographic Primitives*/
+builtins: asymmetric-encryption
+functions: h/1
+/* 2. Public key infrastructure */
+rule Register_pk:
+  [ Fr(~ltkX) ]
+  -->
+  [ !Ltk($X, ~ltkX), !Pk($X, pk(~ltkX))
+  , Out(pk(~ltkX))] 
+
+// Compromising an agent's long-term key
+rule Reveal_ltk:
+  [ !Ltk($X, ltkX) ]
+  --[ Reveal($X) ]-> 
+  [ Out(ltkX) ]
+
+//  The Protocol 
+rule A_1:
+  [ Fr(~na),!Pk($B,pkB)]
+--[ Running($B,$A,~na)]->
+  [ St_A_1($A, pkB, $B, ~na) 
+   ,Out(aenc(<$A, ~na>, pkB))]
+
+rule B_1:
+  [ !Ltk($B, ltkB), In(aenc(<$A, na>,pk(ltkB)))]
+--[Commit($B,$A,na)]->
+  [Out(h(<na,$B>))
+  ,ST_B_1($B, ltkB, $A, na)
+  ]
+
+rule A_2:
+	[In(h(<~na,B>)),
+	St_A_1(A, pkB, B,~na)]
+--[Finshed(),Secret(A,~na)]->
+[]
+
+
+lemma executable:
+  exists-trace
+   "
+    Ex  #i. Finshed()@i 
+   "
+   
+lemma secret:
+  all-traces
+   "
+    All A n #i. Secret(A,n) @i  ==> (not (Ex #j. K(n)@j)) | (Ex B #j. Reveal(B)@j)
+   "
+
+lemma injectiveagreement:
+  "
+	All A B t #i.
+		Commit(A,B,t) @i
+	==> 
+	(Ex #j. Running(A,B,t) @j & j < i
+		& not (Ex A2 B2 #i2. 
+				Commit(A2,B2,t) @i2 & not (#i2 = #i)
+				)
+	)
+  	| (Ex C #r. Reveal(C)@r )
+   "
+end
+
